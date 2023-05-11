@@ -17,7 +17,7 @@
  *  Simplified for OS project use by Mark Kampe
  */
 
-#include "sys/types.h"
+#include "linux/types.h"
 
 /* types normally from linux/types.h	*/
 typedef __uint32_t	__u32;

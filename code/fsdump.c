@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <sys/types.h>
+#include <linux/types.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <string.h>
@@ -11,6 +11,7 @@
 
 ssize_t pread(int fd, void *buf, size_t count, off_t offset);
 void print_dir_entries(int disk_image, int block_size, struct ext2_inode* inode, int inode_number);
+void print_inode(struct ext2_inode inode, int inode_number);
 
 
 
@@ -69,6 +70,7 @@ int main(int argc, char** argv) {
         }
         else{
             num_blocks = superblock.s_blocks_count % superblock.s_blocks_per_group;
+            // the size is exactly large enough to fit the num_blocks_per_group for every group
             if(num_blocks == 0){
                 num_blocks = superblock.s_blocks_per_group;
             }
@@ -133,12 +135,11 @@ int main(int argc, char** argv) {
 
         /* END OF STAGE 4, IFREE */
 
-        /* BEGINNING OF STAGE 5, INODE SUMMARY*/
-
         //loop over every inode in the inode table, this handles all stages past this point
         for(int k = 0; k < (int)(superblock.s_inodes_per_group); k++){
             
             
+            /* BEGINNING OF STAGE 5, INODE SUMMARY*/
 
             struct ext2_inode inode;
             inode_size = sizeof(inode);
@@ -148,79 +149,8 @@ int main(int argc, char** argv) {
                 exit(1);
             }
 
-            //verify this inode is not free
-            if((inode.i_mode==0 && inode.i_links_count==0)) {
-                continue;
-            }
-
-            // code to determine filetype of used inode. 
-            char file_type = malloc(sizeof(char));
-            if(S_ISREG(inode.i_mode)){
-                file_type = 'f';
-            }
-            else if(S_ISDIR(inode.i_mode)){
-                file_type = 'd';
-            }
-            else if(S_ISLNK(inode.i_mode)){
-                file_type = 's';
-            }
-            else{
-                file_type = '?';
-            }
-
-            int inode_number = k+1;
-            char inode_file_type = file_type; 
-            mode_t mode = inode.i_mode & 0xFFF;
-            uid_t owner = inode.i_uid;
-            gid_t group = inode.i_gid;
-            __u16 link_count = inode.i_links_count;
-            __u32 file_size = inode.i_size;
-            __u32 block_count = inode.i_blocks;
-
-            //time data transformations:
-            __u32 time1 = inode.i_ctime;
-            __u32 time2 = inode.i_mtime;
-            __u32 time3 = inode.i_atime;
-
-            time_t creation_time = (time_t)(time1);
-            struct tm *inode_ctime = gmtime(&creation_time);
-            char creation_time_final[20];
-            strftime(creation_time_final, 20, "%m/%d/%y %H:%M:%S", inode_ctime);
-
-            time_t modification_time = (time_t)(time2);
-            struct tm *inode_mtime = gmtime(&modification_time);
-            char modification_time_final[20];
-            strftime(modification_time_final, 20, "%m/%d/%y %H:%M:%S", inode_mtime);
-
-            time_t access_time = (time_t)(time3);
-            struct tm *inode_atime = gmtime(&access_time);
-            char access_time_final[20];
-            strftime(access_time_final, 20, "%m/%d/%y %H:%M:%S", inode_atime);
-
-            // end of time date transformations
-
-            //the colossal print:
-            printf("INODE,%d,%c,%o,%d,%d,%d,%s,%s,%s,%d,%d"
-            ,inode_number, inode_file_type, mode, owner, group, link_count
-            ,creation_time_final, modification_time_final
-            ,access_time_final, file_size, block_count);
-
-            //prints for edge cases depending on Inode type:
-            if(S_ISREG(inode.i_mode) || S_ISDIR(inode.i_mode)) {
-                for(int j = 0; j < 15; j++){
-                    printf(",%d", inode.i_block[j]);
-                }
-            } else if(S_ISLNK(inode.i_mode) && inode.i_size<60) {
-                printf(",%d", inode.i_block[0]);
-            } else if(S_ISLNK(inode.i_mode)) {
-                for(int j = 0; j < 15; j++) {
-                    if(inode.i_block[j]!=0) {
-                        printf(",%d", inode.i_block[j]);
-                    }
-                }
-            }
-
-            printf("\n");
+            //helper function that prints all information related to just the inode, no directory or indirect stuff here
+            print_inode(inode, k);
 
             /* END OF STAGE 5, INODE SUMMARY*/
 
@@ -240,6 +170,85 @@ int main(int argc, char** argv) {
 
     close(file_system);
     return 0;
+
+}
+
+
+void print_inode(struct ext2_inode inode, int inode_number) {
+    //verify this inode is not free
+
+    if((inode.i_mode==0 && inode.i_links_count==0)) {
+        return;
+    }
+
+    // code to determine filetype of used inode. 
+    char file_type = malloc(sizeof(char));
+    if(S_ISREG(inode.i_mode)){
+        file_type = 'f';
+    }
+    else if(S_ISDIR(inode.i_mode)){
+        file_type = 'd';
+    }
+    else if(S_ISLNK(inode.i_mode)){
+        file_type = 's';
+    }
+    else{
+        file_type = '?';
+    }
+
+    inode_number = inode_number;
+    char inode_file_type = file_type; 
+    mode_t mode = inode.i_mode & 0xFFF;
+    __u16 owner = inode.i_uid;
+    __u16 group = inode.i_gid;
+    __u16 link_count = inode.i_links_count;
+    __u32 file_size = inode.i_size;
+    __u32 block_count = inode.i_blocks;
+
+    //time data transformations:
+    __u32 time1 = inode.i_ctime;
+    __u32 time2 = inode.i_mtime;
+    __u32 time3 = inode.i_atime;
+
+    time_t creation_time = (time_t)(time1);
+    struct tm *inode_ctime = gmtime(&creation_time);
+    char creation_time_final[20];
+    strftime(creation_time_final, 20, "%m/%d/%y %H:%M:%S", inode_ctime);
+
+    time_t modification_time = (time_t)(time2);
+    struct tm *inode_mtime = gmtime(&modification_time);
+    char modification_time_final[20];
+    strftime(modification_time_final, 20, "%m/%d/%y %H:%M:%S", inode_mtime);
+
+    time_t access_time = (time_t)(time3);
+    struct tm *inode_atime = gmtime(&access_time);
+    char access_time_final[20];
+    strftime(access_time_final, 20, "%m/%d/%y %H:%M:%S", inode_atime);
+
+    // end of time date transformations
+
+    //the colossal print:
+    printf("INODE,%d,%c,%o,%d,%d,%d,%s,%s,%s,%d,%d"
+    ,inode_number+1, inode_file_type, mode, owner, group, link_count
+    ,creation_time_final, modification_time_final
+    ,access_time_final, file_size, block_count);
+
+    //prints for edge cases depending on Inode type:
+    if(S_ISREG(inode.i_mode) || S_ISDIR(inode.i_mode)) {
+        for(int j = 0; j < 15; j++){
+            printf(",%d", inode.i_block[j]);
+        }
+    } else if(S_ISLNK(inode.i_mode) && inode.i_size<60) {
+        printf(",%d", inode.i_block[0]);
+    } else if(S_ISLNK(inode.i_mode)) {
+        for(int j = 0; j < 15; j++) {
+            if(inode.i_block[j]!=0) {
+                printf(",%d", inode.i_block[j]);
+            }
+        }
+    }
+
+    printf("\n");
 
 }
 
