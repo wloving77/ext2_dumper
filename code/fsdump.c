@@ -17,6 +17,10 @@ void print_inode(struct ext2_inode inode, int inode_number);
 
 int main(int argc, char** argv) {
 
+    if(argc!=2){
+        printf("INCORRECT # OF ARGUMENTS");
+    }
+
     int file_system;
     file_system = open(argv[1], O_RDONLY);
     if (file_system < 0){
@@ -175,14 +179,14 @@ int main(int argc, char** argv) {
 
 
 void print_inode(struct ext2_inode inode, int inode_number) {
-    //verify this inode is not free
 
+    //verify this inode is not free
     if((inode.i_mode==0 && inode.i_links_count==0)) {
         return;
     }
 
     // code to determine filetype of used inode. 
-    char file_type = malloc(sizeof(char));
+    char file_type;
     if(S_ISREG(inode.i_mode)){
         file_type = 'f';
     }
@@ -205,7 +209,7 @@ void print_inode(struct ext2_inode inode, int inode_number) {
     __u32 file_size = inode.i_size;
     __u32 block_count = inode.i_blocks;
 
-    //time data transformations:
+    //time data transformations, same thing for all 3:
     __u32 time1 = inode.i_ctime;
     __u32 time2 = inode.i_mtime;
     __u32 time3 = inode.i_atime;
@@ -265,22 +269,24 @@ void print_dir_entries(int disk_image, int block_size, struct ext2_inode* inode,
         if(inode->i_block[i] == 0) {
             continue;
         }
+        off_t global_offset = inode->i_block[i] * block_size;
         off_t dir_offset = 0;
         while (dir_offset < block_size) {
 
-
-            // off_t global_offset = (inode->i_block[i] * block_size) + dir_offset;
-            off_t global_offset = (inode->i_block[i] * block_size) + dir_offset;
-            pread(disk_image, &dir_entry, dir_entry_size, global_offset);
-
+            //load the directory entry
+            pread(disk_image, &dir_entry, dir_entry_size, global_offset + dir_offset);
 
             //for readability and convenience I duplicate these
             inode_number = inode_number;
             cumulative_offset = cumulative_offset;
             __u32 inode_referenced = dir_entry.inode;
-            __u8 entry_length = dir_entry.rec_len;
+            __u16 entry_length = dir_entry.rec_len;
             __u8 name_length = dir_entry.name_len;
-            char *name = dir_entry.name;
+
+            //code to ensure filename is copies safely and is the correct length
+            char name[256];
+            memcpy(name, dir_entry.name, name_length);
+            name[name_length] = '\0';
 
             //break before printing an invalid entry, increment j otherwise
             if(entry_length == 0 || name_length==0) {
@@ -293,8 +299,8 @@ void print_dir_entries(int disk_image, int block_size, struct ext2_inode* inode,
 
 
             //increment J by the length of this entry
-            cumulative_offset+=(int)entry_length;
-            dir_offset+=(off_t)entry_length;
+            cumulative_offset+=entry_length;
+            dir_offset+=entry_length;
             
         }
 
