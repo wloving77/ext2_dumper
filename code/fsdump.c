@@ -192,7 +192,7 @@ int main(int argc, char** argv) {
 void print_inode(struct ext2_inode inode, int inode_number) {
 
     //verify this inode is not free
-    if((inode.i_mode==0 && inode.i_links_count==0)) {
+    if((inode.i_mode==0 || inode.i_links_count==0)) {
         return;
     }
 
@@ -306,6 +306,12 @@ int print_dir_entries(int disk_image, int block_size, struct ext2_inode* inode, 
                 break;
             }
 
+            if(inode_referenced == 0) {
+                dir_offset+=entry_length;
+                cumulative_offset+=entry_length;
+                continue;
+            }
+
             //print directory entry information for this entry
             printf("DIRENT,%d,%d,%d,%d,%d,'%s'\n", inode_number+1, cumulative_offset, inode_referenced
             ,entry_length, name_length, name);
@@ -382,6 +388,12 @@ void print_indirect_blocks(int disk_image, struct ext2_inode* inode, int block_s
                     //break before printing an invalid entry, increment j otherwise
                     if(entry_length == 0 || name_length==0) {
                         break;
+                    }
+                    
+                    if(inode_referenced == 0) {
+                        dir_offset+=entry_length;
+                        cumulative_offset+=entry_length;
+                        continue;
                     }
 
                     //print directory entry information for this entry
