@@ -18,7 +18,8 @@ void print_indirect_blocks(int disk_image, struct ext2_inode* inode, int block_s
 int main(int argc, char** argv) {
 
     if(argc!=2){
-        printf("INCORRECT # OF ARGUMENTS");
+        printf("INCORRECT # OF ARGUMENTS\n");
+        exit(-1);
     }
 
     int file_system;
