@@ -12,7 +12,7 @@
 ssize_t pread(int fd, void *buf, size_t count, off_t offset);
 void print_dir_entries(int disk_image, int block_size, struct ext2_inode* inode, int inode_number);
 void print_inode(struct ext2_inode inode, int inode_number);
-
+void print_indirect_blocks(int disk_image, int block_size, __u32 block_number, int inode_number, int level, int logical_block_offset);
 
 
 int main(int argc, char** argv) {
@@ -140,7 +140,7 @@ int main(int argc, char** argv) {
         /* END OF STAGE 4, IFREE */
 
         //loop over every inode in the inode table, this handles all stages past this point
-        for(int k = 0; k < (int)(superblock.s_inodes_per_group); k++){
+        for(int k = 0; k < (int)(superblock.s_inodes_per_group); k++) {
             
             
             /* BEGINNING OF STAGE 5, INODE SUMMARY*/
@@ -165,9 +165,17 @@ int main(int argc, char** argv) {
                 print_dir_entries(file_system, block_size, &inode, k);
             }
 
+            /* END OF STAGE 6, NORMAL DIRECTORY PRINTING */
 
+            /* BEGINNING OF STAGE 7, INDIRECT BLOCKS*/
 
-
+            if(inode.i_block[12]!=0) {
+                print_indirect_blocks(file_system, block_size, inode.i_block[12], k, 1, EXT2_NDIR_BLOCKS);
+            } else if (inode.i_block[13]!=0) {
+                print_indirect_blocks(file_system, block_size, inode.i_block[13], k, 2, EXT2_NDIR_BLOCKS + block_size / sizeof(__u32));
+            } else if (inode.i_block[14]!=0) {
+                print_indirect_blocks(file_system, block_size, inode.i_block[14], k, 3, EXT2_NDIR_BLOCKS + block_size / sizeof(__u32) + (1 + block_size / sizeof(__u32)));
+            }
         }
     //frees the array integers tracking inode status for this group_desc    
     }
@@ -254,6 +262,8 @@ void print_inode(struct ext2_inode inode, int inode_number) {
 
     printf("\n");
 
+    
+
 }
 
 
@@ -307,4 +317,35 @@ void print_dir_entries(int disk_image, int block_size, struct ext2_inode* inode,
     }
 
 
+}
+
+//function for handling the indirect blocks
+void print_indirect_blocks(int disk_image, int block_size, __u32 block_number, int inode_number, int level, int logical_block_offset){
+    __u32 block[block_size / sizeof(__u32)]; 
+    int size_block_array = sizeof(block);
+    long unsigned int n = pread(disk_image, &block, size_block_array, block_number * block_size);
+    if(n!=sizeof(block)) {
+        perror("SIZE INCORRECT, INDIRECT");
+        exit(1);
+    }
+
+    for(int i = 0; i < (int)(block_size / sizeof(__u32)); i++) {
+        if(block[i] == 0) {
+            continue;
+        }
+
+        printf("INDIRECT,%d,%d,%d,%u,%u\n", inode_number+1, level, logical_block_offset + i, block_number, block[i]);
+
+        if(level > 1) { 
+
+            int logical_offset = 0;
+            if(level == 2) {
+                logical_offset = EXT2_NDIR_BLOCKS + (block_size / sizeof(__u32)) + (i * (block_size / sizeof(__u32)));
+            } else if (level == 3) {
+                logical_offset = EXT2_NDIR_BLOCKS + (block_size / sizeof(__u32)) * (1 + (block_size / sizeof(__u32))) + (i * (block_size / sizeof(__u32)) * (block_size / sizeof(__u32)));
+            }
+            print_indirect_blocks(disk_image, block_size, block[i], inode_number, level-1, logical_offset);
+        }
+
+    }
 }
