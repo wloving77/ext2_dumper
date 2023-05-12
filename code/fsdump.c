@@ -10,9 +10,9 @@
 #include "ext2_fs.h"
 
 ssize_t pread(int fd, void *buf, size_t count, off_t offset);
-void print_dir_entries(int disk_image, int block_size, struct ext2_inode* inode, int inode_number);
+int print_dir_entries(int disk_image, int block_size, struct ext2_inode* inode, int inode_number);
 void print_inode(struct ext2_inode inode, int inode_number);
-void print_indirect_blocks(int disk_image, int block_size, __u32 block_number, int inode_number, int level, int logical_block_offset);
+void print_indirect_blocks(int disk_image, struct ext2_inode* inode, int block_size, __u32 block_number, int inode_number, int level, int logical_block_offset, int directory_cumulative_offset);
 
 
 int main(int argc, char** argv) {
@@ -161,20 +161,23 @@ int main(int argc, char** argv) {
             /* BEGINNING OF STAGE 6, DIRECTORY ENTRY'S*/
 
             //check if inode is a directory node
+            int directory_cumulative_offset = 0;
             if(S_ISDIR(inode.i_mode)) {
-                print_dir_entries(file_system, block_size, &inode, k);
+                directory_cumulative_offset = print_dir_entries(file_system, block_size, &inode, k);
             }
 
             /* END OF STAGE 6, NORMAL DIRECTORY PRINTING */
 
             /* BEGINNING OF STAGE 7, INDIRECT BLOCKS*/
 
-            if(inode.i_block[12]!=0) {
-                print_indirect_blocks(file_system, block_size, inode.i_block[12], k, 1, EXT2_NDIR_BLOCKS);
-            } else if (inode.i_block[13]!=0) {
-                print_indirect_blocks(file_system, block_size, inode.i_block[13], k, 2, EXT2_NDIR_BLOCKS + block_size / sizeof(__u32));
-            } else if (inode.i_block[14]!=0) {
-                print_indirect_blocks(file_system, block_size, inode.i_block[14], k, 3, EXT2_NDIR_BLOCKS + block_size / sizeof(__u32) + (1 + block_size / sizeof(__u32)));
+            if(inode.i_block[EXT2_IND_BLOCK]!=0) {
+                print_indirect_blocks(file_system, &inode, block_size, inode.i_block[12], k, 1, EXT2_NDIR_BLOCKS, directory_cumulative_offset);
+            } 
+            if (inode.i_block[EXT2_DIND_BLOCK]!=0) {
+                print_indirect_blocks(file_system, &inode, block_size, inode.i_block[13], k, 2, EXT2_NDIR_BLOCKS + block_size / sizeof(__u32), directory_cumulative_offset);
+            }
+            if (inode.i_block[EXT2_TIND_BLOCK]!=0) {
+                print_indirect_blocks(file_system, &inode, block_size, inode.i_block[14], k, 3, EXT2_NDIR_BLOCKS + block_size / sizeof(__u32) + (block_size / sizeof(__u32)) * (block_size / sizeof(__u32)), directory_cumulative_offset);
             }
         }
     //frees the array integers tracking inode status for this group_desc    
@@ -247,7 +250,7 @@ void print_inode(struct ext2_inode inode, int inode_number) {
 
     //prints for edge cases depending on Inode type:
     if(S_ISREG(inode.i_mode) || S_ISDIR(inode.i_mode)) {
-        for(int j = 0; j < 15; j++){
+        for(int j = 0; j < EXT2_N_BLOCKS; j++){
             printf(",%d", inode.i_block[j]);
         }
     } else if(S_ISLNK(inode.i_mode) && inode.i_size<60) {
@@ -267,7 +270,7 @@ void print_inode(struct ext2_inode inode, int inode_number) {
 }
 
 
-void print_dir_entries(int disk_image, int block_size, struct ext2_inode* inode, int inode_number){
+int print_dir_entries(int disk_image, int block_size, struct ext2_inode* inode, int inode_number){
 
     //initialize a directory entry struct and a name field for it
     struct ext2_dir_entry dir_entry;
@@ -316,36 +319,85 @@ void print_dir_entries(int disk_image, int block_size, struct ext2_inode* inode,
 
     }
 
+    return cumulative_offset;
+
 
 }
 
 //function for handling the indirect blocks
-void print_indirect_blocks(int disk_image, int block_size, __u32 block_number, int inode_number, int level, int logical_block_offset){
-    __u32 block[block_size / sizeof(__u32)]; 
-    int size_block_array = sizeof(block);
-    long unsigned int n = pread(disk_image, &block, size_block_array, block_number * block_size);
+void print_indirect_blocks(int disk_image, struct ext2_inode* inode, int block_size, __u32 block_number, int inode_number, int level, int logical_block_offset, int directory_cumulative_offset){
+    int num_entries_per_block = block_size / sizeof(__u32);
+    __u32 block[num_entries_per_block]; 
+    long unsigned int n = pread(disk_image, &block, sizeof(block), block_number * block_size);
     if(n!=sizeof(block)) {
         perror("SIZE INCORRECT, INDIRECT");
         exit(1);
     }
+    
+    int cumulative_offset = directory_cumulative_offset;
 
-    for(int i = 0; i < (int)(block_size / sizeof(__u32)); i++) {
+    for(int i = 0; i < (int)(num_entries_per_block); i++) {
         if(block[i] == 0) {
             continue;
         }
+        
+        int current_logical_offset = 0;
+        if(level == 1) {
+            current_logical_offset = logical_block_offset + i;
+        } else if(level == 2) {
+            current_logical_offset = logical_block_offset + (i * (num_entries_per_block));
+        } else if (level == 3) {
+            current_logical_offset = logical_block_offset + (i * (block_size / sizeof(__u32)) * (block_size / sizeof(__u32)));
+        }
 
-        printf("INDIRECT,%d,%d,%d,%u,%u\n", inode_number+1, level, logical_block_offset + i, block_number, block[i]);
+
+        printf("INDIRECT,%d,%d,%d,%u,%u\n", inode_number+1, level, current_logical_offset, block_number, block[i]);
 
         if(level > 1) { 
+            print_indirect_blocks(disk_image, inode, block_size, block[i], inode_number, level-1, current_logical_offset, directory_cumulative_offset);
+        } else if (level==1) {
+            struct ext2_dir_entry dir_entry;
+            int dir_entry_size = sizeof(dir_entry);
+            //check if it's a directory, then print out it's info. 
+            if(S_ISDIR(inode->i_mode)) {
+                off_t global_offset = block[i] * block_size;
+                off_t dir_offset = 0;
+                while (dir_offset < block_size) {
 
-            int logical_offset = 0;
-            if(level == 2) {
-                logical_offset = EXT2_NDIR_BLOCKS + (block_size / sizeof(__u32)) + (i * (block_size / sizeof(__u32)));
-            } else if (level == 3) {
-                logical_offset = EXT2_NDIR_BLOCKS + (block_size / sizeof(__u32)) * (1 + (block_size / sizeof(__u32))) + (i * (block_size / sizeof(__u32)) * (block_size / sizeof(__u32)));
+                    //load the directory entry
+                    pread(disk_image, &dir_entry, dir_entry_size, global_offset + dir_offset);
+
+                    //for readability and convenience I duplicate these
+                    inode_number = inode_number;
+                    cumulative_offset = cumulative_offset;
+                    __u32 inode_referenced = dir_entry.inode;
+                    __u16 entry_length = dir_entry.rec_len;
+                    __u8 name_length = dir_entry.name_len;
+
+                    //code to ensure filename is copies safely and is the correct length
+                    char name[256];
+                    memcpy(name, dir_entry.name, name_length);
+                    name[name_length] = '\0';
+
+                    //break before printing an invalid entry, increment j otherwise
+                    if(entry_length == 0 || name_length==0) {
+                        break;
+                    }
+
+                    //print directory entry information for this entry
+                    printf("DIRENT,%d,%d,%d,%d,%d,'%s'\n", inode_number+1, cumulative_offset, inode_referenced
+                    ,entry_length, name_length, name);
+
+
+                    //increment J by the length of this entry
+                    cumulative_offset+=entry_length;
+                    dir_offset+=entry_length;
+                    
+                }
             }
-            print_indirect_blocks(disk_image, block_size, block[i], inode_number, level-1, logical_offset);
         }
 
     }
+    return;
 }
+
